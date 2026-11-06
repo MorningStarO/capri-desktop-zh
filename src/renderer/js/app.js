@@ -35,7 +35,7 @@ const AWAY_MS = 15 * 60 * 1000; // the pointer still this long: you were away fr
 const SNOOZE_MS = 10 * 60 * 1000;
 
 // what you made her, from the config (custom.js)
-const mine = (cfg) => ({ userName: cfg.userName || '', persona: cfg.persona || '', myLines: cfg.myLines || [], memories: cfg.memories || [] });
+const mine = (cfg) => ({ userName: cfg.userName || '', persona: cfg.persona || '', myLines: cfg.myLines || [], memories: cfg.memories || [], tone: cfg.tone || 'canon', toneExtra: cfg.toneExtra || '' });
 
 async function boot() {
   const [config, image, intro, ...cutins] = await Promise.all([
@@ -669,6 +669,9 @@ async function boot() {
         break;
       case 'customize': // "Make her yours" in her menu
         custom.open();
+        break;
+      case 'showPrompt': // "See her prompt" in her menu
+        chat.showPrompt();
         break;
       case 'setupChat': // "Set it up with her" in her menu's AI model
         setup.chat();

@@ -30,6 +30,9 @@ export class Custom {
     const { custom } = this.brain;
     this.capri.perform('curious', this.capri.towardCenter());
 
+    // only her Chinese has a tone to pick (prompt.js): the others keep the English prompt
+    if (this.brain.lang === 'zh' && !(await this.tone())) return;
+
     const name = await this.field({
       line: t.name,
       quote: custom.userName ? fmt(t.nameNow, { name: custom.userName }) : t.nameHow,
@@ -54,6 +57,44 @@ export class Custom {
     this.voice.play('hello');
     this.capri.perform('hop');
     await this.guide.ask({ kind: 'done', face: 'laugh', line: t.saved, quote: t.savedHow, actions: [{ id: 'ok', label: t.done, primary: true }] });
+  }
+
+  // "How she talks": as written, softer, sharper, or a few words of your own. False if it went away.
+  async tone() {
+    const t = this.t;
+    const custom = this.brain.custom;
+    const picked = custom.tone || 'canon';
+    const now = picked === 'own'
+      ? (custom.toneExtra ? fmt(t.toneNow, { tone: custom.toneExtra }) : t.toneOwnHow)
+      : picked === 'soft' ? t.toneSoft : picked === 'sharp' ? t.toneSharp : t.toneCanon;
+    const id = await this.guide.ask({
+      face: 'look',
+      line: t.tone,
+      quote: now,
+      actions: [
+        { id: 'canon', label: t.toneCanon, primary: picked === 'canon' },
+        { id: 'soft', label: t.toneSoft },
+        { id: 'sharp', label: t.toneSharp },
+        { id: 'own', label: t.toneOwn },
+        { id: 'skip', label: t.skip },
+      ],
+    });
+    if (!id) return false;
+    if (id === 'skip' || id === picked) return true;
+    if (id === 'own') {
+      const got = await this.field({
+        line: t.toneOwn,
+        quote: custom.toneExtra ? fmt(t.toneNow, { tone: custom.toneExtra }) : t.toneOwnHow,
+        placeholder: t.tonePlaceholder,
+        clear: Boolean(custom.toneExtra),
+      });
+      if (!got) return false;
+      if (got.action === 'clear') await this.save({ tone: 'canon', toneExtra: '' });
+      else if (got.text) await this.save({ tone: 'own', toneExtra: got.text.slice(0, 120) });
+      return true;
+    }
+    await this.save({ tone: id });
+    return true;
   }
 
   // One line to type in: { text } (trimmed), { action: 'skip' | 'clear' }, or null if it went away.

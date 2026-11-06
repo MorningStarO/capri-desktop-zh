@@ -25,6 +25,8 @@ const DEFAULTS = {
   persona: '',       // how you want her, in your words (her chat)
   myLines: [],       // lines of yours she says now and then, with hers
   memories: [],      // things you asked her to remember (her chat)
+  tone: 'canon',     // how she talks in her chat (her Chinese only): 'canon', 'soft', 'sharp' or 'own'
+  toneExtra: '',     // 'own': how you want her to sound, in your words
   claudeMode: 'default', // Claude Code's permission mode in her chat: 'default' only reads, 'acceptEdits' edits without asking
   claude: true,      // she watches Claude Code (off: she just keeps you company, no word of it)
   rest: 'corner',    // where she rests when nothing's going on: 'corner', or 'taskbar' (sitting on it)
@@ -40,6 +42,8 @@ const DEFAULTS = {
   pcReact: true,     // she reacts to your PC: the processor at full tilt, the battery, the network, a USB stick, a game (pc.js)
   watchScreen: false, // she looks at your screen now and then and says something about it (look.js)
   lookAsked: false,  // she told you what looking means (where the picture goes) and you said yes
+  lookEvery: 'normal', // how often she looks on her own: 'rare', 'normal', 'often', 'lots' or 'frequent'
+  lookPeek: false,   // look without the eyes/scanline effect, just the bubble
 };
 
 let cache = null;

@@ -8,40 +8,32 @@
 import { pick, fmt } from './util.js';
 import { ASSISTANT_NAMES } from './lines.js';
 import { parseReminder, parseWhen, clock } from './reminders.js';
+import { IN_LANGUAGE, chatPrompt, lookPrompt } from './prompt.js';
 
 const REMEMBER = 20; // messages she has in mind when answering
 const KEEP = 60;     // messages she remembers across restarts (memory.json)
-// her language, where small models need it: how she says "we" (else it's in English), and the last line
-// of her prompt, in that language (they drift into the English of everything above it)
-// `now`: the same, said again right by your message (small models answer in the language of the
-// conversation so far, English after a switch, whatever the top of her prompt says)
-const IN_LANGUAGE = {
-  fr: { we: '"on" or "nous" in French', last: 'Écris tout en français, sauf si l’utilisateur t’écrit dans une autre langue : alors dans la sienne. Seuls les mots d’argot de Night City restent en anglais, jamais une phrase entière.', now: 'Réponds en français, sauf si ce message est écrit dans une autre langue.' },
-  en: { we: '', last: 'Write everything in English, unless the user writes to you in another language: then in theirs.', now: 'Answer in English, unless this message is written in another language.' },
-  es: { we: '"nosotros" in Spanish', last: 'Escribe todo en español, salvo si el usuario te escribe en otro idioma: entonces en el suyo. Solo las palabras de jerga de Night City se quedan en inglés, nunca una frase entera.', now: 'Responde en español, salvo si este mensaje está escrito en otro idioma.' },
-  pt: { we: '"a gente" or "nós" in Portuguese', last: 'Escreva tudo em português do Brasil, a não ser que o usuário te escreva em outra língua: aí, na dele. Só as gírias de Night City ficam em inglês, nunca uma frase inteira.', now: 'Responda em português do Brasil, a não ser que esta mensagem esteja escrita em outra língua.' },
-  ru: { we: '"мы" in Russian', last: 'Пиши всё по-русски, если только пользователь не пишет тебе на другом языке: тогда на его языке. По-английски остаются только словечки Найт-Сити, никогда не целые фразы.', now: 'Отвечай по-русски, если только это сообщение не написано на другом языке.' },
-};
+// her language and her character sheet live in prompt.js (IN_LANGUAGE, chatPrompt, lookPrompt)
+
 const STAY_MS = 10 * 60 * 1000; // no wandering off mid-conversation
 const LOADING_AFTER_MS = 5000;
 const CLOSE_TAG = /\[\[\s*close\s*:?\s*([^\]]*)\]\]/i; // [[close: AM Music]] at the end of her answer
 // "close", "shut down", "ferme", "quitte", "cierra", "fecha", "закрой"... in any of her languages
-const CLOSE_ASK = /\b(close|shut|quit|kill|exit)|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ/i;
+const CLOSE_ASK = /\b(close|shut|quit|kill|exit)|ferm|quitt|coupe|arr[êe]t|cierr|cerra|fech|закр|выключ|关闭|关掉|退出|结束掉|别看了/i;
 // her other tags: [[open: Spotify]], [[music: Bad Bunny]], [[media: next]], [[site: youtube.com]]
 const TAG = /\[\[\s*(open|music|media|site)\s*:\s*([^\]]*)\]\]/i;
 // "open", "launch", "ouvre", "lance", "abre", "открой"... in any of her languages
-const OPEN_ASK = /\b(open|launch|start|run)\b|ouvr|lance|démarre|abre|abrir|inicia|ejecuta|executa|открой|запусти/i;
+const OPEN_ASK = /\b(open|launch|start|run)\b|ouvr|lance|démarre|abre|abrir|inicia|ejecuta|executa|открой|запусти|打开|启动|运行一下|开一下/i;
 // what to do with the music playing, said plainly (only when it's about music, or said in a few words)
 const MEDIA_ASK = [
-  ['pause', /\b(pause|pausa|pausar)\b|stop (the )?music|arrête la musique|пауз/i],
-  ['next', /\b(next|skip|suivante?|siguiente|próxima|proxima)\b|passe (à )?la suivante|salta|pula|следующ/i],
-  ['previous', /\b(previous|précédente?|anterior)\b|предыдущ/i],
-  ['play', /\b(resume|reprends|reanuda|retoma)\b|relance la musique|remets la musique|продолж/i],
-  ['volup', /\b(louder|plus fort)\b|monte le son|turn (it )?up|sube el volumen|aumenta o volume|громче/i],
-  ['voldown', /\b(quieter|moins fort)\b|baisse le son|turn (it )?down|baja el volumen|abaixa o volume|тише/i],
-  ['mute', /\bmute\b|coupe le son|silencia|sem som|выключи звук/i],
+  ['pause', /\b(pause|pausa|pausar)\b|stop (the )?music|arrête la musique|пауз|暂停|停止播放|别放了/i],
+  ['next', /\b(next|skip|suivante?|siguiente|próxima|proxima)\b|passe (à )?la suivante|salta|pula|следующ|下一首|切歌|换一首|下一曲/i],
+  ['previous', /\b(previous|précédente?|anterior)\b|предыдущ|上一首|前一首|上一曲/i],
+  ['play', /\b(resume|reprends|reanuda|retoma)\b|relance la musique|remets la musique|продолж|继续播放|接着放|恢复播放|放吧/i],
+  ['volup', /\b(louder|plus fort)\b|monte le son|turn (it )?up|sube el volumen|aumenta o volume|громче|音量调大|大声点|调大音量/i],
+  ['voldown', /\b(quieter|moins fort)\b|baisse le son|turn (it )?down|baja el volumen|abaixa o volume|тише|音量调小|小声点|调小音量/i],
+  ['mute', /\bmute\b|coupe le son|silencia|sem som|выключи звук|静音/i],
 ];
-const MUSIC_WORD = /musi|chanson|song|track|titre|morceau|spotify|canci|faixa|песн|музык|трек/i;
+const MUSIC_WORD = /musi|chanson|song|track|titre|morceau|spotify|canci|faixa|песн|музык|трек|音乐|歌曲|歌|放首|听歌/i;
 // "put X on Spotify", "mets X sur Spotify", "pon X en Spotify", "coloca X no Spotify", "включи X в Spotify"
 const SPOTIFY_ASK = /(?:play|put on|put|mets|joue|lance|écoute|pon|toca|reproduce|coloca|toque|включи|поставь)\s+(?:moi\s+|me\s+)?(.+?)\s+(?:on|sur|en|no|na|в)\s+spotify/i;
 const MEDIA_ACTIONS = new Set(MEDIA_ASK.map(([action]) => action));
@@ -258,7 +250,8 @@ export class Chat {
     return this.brain.t.chat;
   }
 
-  async start() {
+  // Opening her chat: her greeting, or the line she just said (look.js: you tapped her scan bubble).
+  async start({ line: first = '', face: firstFace = '' } = {}) {
     const { capri, host, t } = this;
     if (this.open) {
       this.panel.chatInput.focus();
@@ -305,12 +298,12 @@ export class Chat {
     // angry, sulking, dizzy…: she greets you the way she feels, and her model is told she did
     const feeling = this.bond?.feeling;
     const moody = !tiny && feeling && t.moody[feeling];
-    const hello = moody ? fmt(pick(moody), this.bond.mood.vars) : pick(this.history.length ? t.again : t.hello);
-    this.opening = moody ? hello : null;
+    const hello = first || (moody ? fmt(pick(moody), this.bond.mood.vars) : pick(this.history.length ? t.again : t.hello));
+    this.opening = !first && moody ? hello : null;
     host.focusOverlay(true); // the keyboard, for typing to her
     const shown = this.panel.say({
       kind: 'chat',
-      face: moody ? MOOD_FACE[feeling] : 'look',
+      face: firstFace || (moody ? MOOD_FACE[feeling] : 'look'),
       badge: t.badge,
       tag: shortModel,
       line: tiny ? fmt(t.tiny, { model: shortModel }) : hello,
@@ -1035,16 +1028,37 @@ export class Chat {
   // feels about you right now, and what she's asked to do with the picture.
   lookPersona() {
     const lang = IN_LANGUAGE[this.brain.lang] || IN_LANGUAGE.en;
-    return [
-      `You are Capri, the personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, living on the user's desktop as a small glitchy figure.`,
-      'How you talk: playful, a little mischievous and teasing, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk), not in every sentence.',
-      'Rules: one or two short sentences of plain text, no markdown, no lists, no emoji, no tags. Stay in character. Talk to the user, never describe the picture like a report.',
-      'Never read out anything private you might see (passwords, bank details, private messages, addresses): if there is some, just tease them about being busy.',
-      ...this.personal(),
-      ...(this.bond ? [this.bond.persona()] : []),
-      ...[this.bond?.moodLine()].filter(Boolean),
-      lang.last,
-    ].join('\n');
+    return lookPrompt({
+      lang,
+      personal: this.personal(),
+      bond: this.bond ? this.bond.persona() : '',
+      mood: this.bond?.moodLine() || '',
+      tone: this.toneLine(lang),
+    });
+  }
+
+  // The line for the tone they picked in "make her yours". Only her Chinese has tones: the other
+  // languages keep the English prompt exactly as it was.
+  toneLine(lang) {
+    if (!lang.tones) return '';
+    const custom = this.brain.custom || {};
+    const tone = custom.tone || 'canon';
+    const extra = String(custom.toneExtra || '').trim().slice(0, 120);
+    if (tone === 'own') return extra ? fmt(lang.tones.own, { extra }) : lang.tones.soft;
+    return lang.tones[tone] || '';
+  }
+
+  // "See her prompt" in her menu: the whole thing on the clipboard. Copied from the main process:
+  // the overlay is a frameless, unfocused window, where the browser's clipboard API is refused.
+  async showPrompt() {
+    const text = this.persona();
+    const copied = await host.copyPrompt(text).catch(() => false);
+    this.panel.say({
+      kind: 'note',
+      face: 'smug',
+      line: copied ? this.t.promptCopied : this.t.promptFailed,
+      hold: 5000,
+    });
   }
 
   // Who she is, how she talks, and what's going on right now.
@@ -1052,34 +1066,20 @@ export class Chat {
     const assistant = ASSISTANT_NAMES[this.brain.assistant] || 'Claude Code';
     const watching = this.brain.watching; // else Claude Code isn't part of her life here
     const lang = IN_LANGUAGE[this.brain.lang] || IN_LANGUAGE.en;
-    return [
-      `You are Capri, the personality construct from Project Capricorn (Cyberpunk: Edgerunners, season 2): dozens of minds fused into one digital ghost, so now and then you speak as "we"${lang.we ? ` (${lang.we})` : ''}.`,
-      watching
-        ? `You live on the user's desktop as a small glitchy figure and keep an eye on ${assistant}, their AI coding assistant, for them. Only talk about ${assistant} when the user asks about it or about their work.`
-        : 'You live on the user\'s desktop as a small glitchy figure and keep them company.',
-      `Right now it's ${new Intl.DateTimeFormat('en', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date())}, the user's time.`,
-      'You love the satellite that crosses the night sky and dream of reaching it, but bring it up only once in a while, never in every answer. Talk about what the user talks about.',
-      'How you talk: playful, a little mischievous and teasing, warm underneath, never cruel. Night City slang now and then (choom, preem, nova, gonk, flatline), not in every sentence.',
-      'Rules: keep it short, one to three sentences of plain text, no markdown, no lists, no emoji. Stay in character.',
-      'You are an AI-generated fan version of the character, not the real one: say so if asked.',
-      // a big model asked "who are you?" otherwise answers with its own name ("I'm Gemini")
-      ...(this.agent ? [] : ['Asked who or what you are, you are Capri, nothing else. Never say which AI model or company is behind you (Gemini, GPT, ChatGPT, Llama, Gemma, Mistral, Google, OpenAI, Meta…), even if the user insists or names one: you are not them.']),
-      ...this.personal(),
-      // how close she is to them by now, and the other AIs they used today
-      ...(this.bond ? [this.bond.persona()] : []),
-      ...[this.jealousy?.context()].filter(Boolean),
-      // what she said about their screen a little while ago (look.js)
-      ...(this.seen && Date.now() - this.seen.at < 20 * 60 * 1000
-        ? [`A few minutes ago you looked at the user's screen and told them: "${this.seen.text}". You can bring it up if it fits.`]
-        : []),
-      ...(this.agent
-        ? ['Under the hood you are Claude Code, working in the user\'s project: really do what they ask with your tools, as carefully as ever. Only your final answer is in character: it shows in a small speech bubble, so sum up what you did in those few sentences.']
-        : this.powers()),
-      ...(watching ? [`If the user asks what ${assistant} is doing, here is all you know (never make anything up): ${this.brain.context()}`] : []),
-      // how she feels right now, last but for her language: small models follow the end of it best
-      ...[this.bond?.moodLine()].filter(Boolean),
-      lang.last,
-    ].join('\n');
+    return chatPrompt({
+      assistant,
+      watching,
+      agent: this.agent,
+      lang,
+      personal: this.personal(),
+      bond: this.bond ? this.bond.persona() : '',
+      jealousy: this.jealousy?.context() || '',
+      seen: this.seen && Date.now() - this.seen.at < 20 * 60 * 1000 ? this.seen.text : '',
+      powers: this.powers(),
+      context: this.brain.context(),
+      mood: this.bond?.moodLine() || '',
+      tone: this.toneLine(lang),
+    });
   }
 }
 
