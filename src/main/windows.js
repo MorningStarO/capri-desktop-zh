@@ -44,7 +44,8 @@ function startWindowWatch({ overlay, onUpdate }) {
       // only what overlaps Capri's screen
       .filter((w) => w.x < bounds.width && w.x + w.w > 0 && w.y < bounds.height && w.y + w.h > 0);
     onUpdate({
-      fg: last.fg, taskbar: Boolean(last.taskbar), ai: Array.isArray(last.ai) ? last.ai : [],
+      fg: last.fg, taskbar: Boolean(last.taskbar), tray: Boolean(last.tray),
+      ai: Array.isArray(last.ai) ? last.ai : [],
       pages: Array.isArray(last.pages) ? last.pages : [], dl: Boolean(last.dl),
       game: last.game || null, usb: Array.isArray(last.usb) ? last.usb : [], plug: last.plug || null, wins,
     });
@@ -89,6 +90,11 @@ function startWindowWatch({ overlay, onUpdate }) {
     },
     // her window moved (another screen, the taskbar in it or not): the same windows, from there
     refresh: send,
+    // say what's there now, even if it looks the same (we're checking whether the taskbar let go)
+    probe() {
+      if (!child || !child.stdin.writable) return;
+      child.stdin.write('snap\n');
+    },
     // Close the page of AI `key` (a tab, Ctrl+W) in window `id`, if it's still that page and in
     // front: '' once done, else why not ('front', 'browser', 'page', 'keys', 'gone', 'late').
     close(id, key) {

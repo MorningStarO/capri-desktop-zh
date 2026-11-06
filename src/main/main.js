@@ -44,6 +44,9 @@ let demoTimer = null;
 let windowWatch = null;
 // the watcher only speaks when something changes: the overlay asks for this when it (re)loads
 let lastWindows = null;
+let restMode = 'corner'; // where she rests: 'taskbar' puts her over it, and needs watching
+let topWatch = null;     // every second: is the taskbar sitting on her again?
+let raisedAt = 0;        // when she was last put back on top (the timers below don't pile up)
 let chatModels = null; // the provider's models, as last seen (null: not reached)
 let chatError = null;  // why not, when the provider said
 let chatErrorCode = null; // 'nokey' or 'nourl': what her setup should ask for
@@ -157,10 +160,14 @@ function rearmOverlay() {
   console.log('[capri] mouse hook set up again');
 }
 
-// Back on top of everything, the taskbar included (it comes up over her when it's clicked). Twice:
-// the taskbar can come up again a moment later, as its menus and previews open.
+// Back on top of everything, the taskbar included (it comes up over her when it's clicked, and its
+// menus a moment later). Several tries, since Windows puts the taskbar back up more than once; a
+// second call inside the window is the same news, and skips the timers it already has.
 function raiseOverlay() {
-  for (const wait of [0, 400]) {
+  const now = Date.now();
+  if (now - raisedAt < 1500) return;
+  raisedAt = now;
+  for (const wait of [0, 80, 250, 600, 1200]) {
     setTimeout(() => {
       if (!overlay || overlay.isDestroyed()) return;
       overlay.setAlwaysOnTop(true, 'screen-saver');
@@ -288,8 +295,10 @@ function rendererConfig() {
 function updateConfig(patch) {
   config.save(patch);
   if ('rest' in patch) {
+    restMode = config.load().rest;
     fitOverlay(); // the taskbar in her window or not
     windowWatch?.refresh();
+    if (restMode === 'taskbar') raiseOverlay(); // sitting on it: over it, from the start
   }
   const cfg = rendererConfig();
   overlay?.webContents.send('capri:config', cfg);
@@ -340,6 +349,7 @@ function rebuildTray() {
         : [{ label: t.noReminders, enabled: false }],
     },
     { label: t.custom, click: () => sendCommand('customize') },
+    { label: t.prompt, click: () => sendCommand('showPrompt') },
     { label: cfg.visible ? t.hide : t.show, accelerator: 'Ctrl+Alt+C', click: () => toggleVisible() },
     { type: 'separator' },
     {
@@ -430,6 +440,19 @@ function rebuildTray() {
       },
     },
     {
+      // how often she does it on her own (picked before turning it on: it applies once she does)
+      label: t.lookEvery,
+      submenu: [['rare', t.lookFew], ['normal', t.lookNormal], ['often', t.lookOften], ['lots', t.lookLots], ['frequent', t.lookFrequent]]
+        .map(([lookEvery, label]) => ({
+          label, type: 'radio', checked: (cfg.lookEvery || 'normal') === lookEvery, click: () => updateConfig({ lookEvery }),
+        })),
+    },
+    {
+      // no eyes, no scanline: she just says what she saw
+      label: t.lookPeek, type: 'checkbox', checked: Boolean(cfg.lookPeek),
+      click: (item) => updateConfig({ lookPeek: item.checked }),
+    },
+    {
       label: t.rest,
       submenu: [['corner', t.restCorner], ['taskbar', t.restTaskbar]].map(([rest, label]) => ({
         label, type: 'radio', checked: cfg.rest === rest, click: () => updateConfig({ rest }),
@@ -489,13 +512,13 @@ function rebuildTray() {
       checked: app.getLoginItemSettings(loginItemOptions()).openAtLogin,
       click: (item) => app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: item.checked }),
     },
-    // her hooks, while she watches Claude Code
+    // her hooks, while she watches one of them (the labels name the one watched)
     ...(cfg.claude ? [
       { type: 'separator' },
       hookState.installed
-        ? { label: t.hooksOn, enabled: false }
-        : { label: t.hooksOff, click: () => runHooks('install') },
-      ...(hookState.installed ? [{ label: t.hooksRemove, click: () => runHooks('uninstall') }] : []),
+        ? { label: hookWord(t.hooksOn, watched.name), enabled: false }
+        : { label: hookWord(t.hooksOff, watched.name), click: () => runHooks('install') },
+      ...(hookState.installed ? [{ label: hookWord(t.hooksRemove, watched.name), click: () => runHooks('uninstall') }] : []),
     ] : []),
     { type: 'separator' },
     { label: t.quit, click: () => app.quit() },
@@ -508,6 +531,11 @@ function rebuildTray() {
 // it needs the project folder as argument.
 function loginItemOptions() {
   return app.isPackaged ? {} : { path: process.execPath, args: [ROOT] };
+}
+
+// "Hooks Claude Code : installés" — with the name of the one she actually watches
+function hookWord(label, name) {
+  return label.replace(/Claude Code/g, name);
 }
 
 // From the tray, she says how it went; from her welcome panel (quiet), the panel does.
@@ -882,6 +910,11 @@ function registerIpc() {
     await clipboard.write([new ClipboardItem({ 'image/png': png })]);
     return true;
   });
+  // "See her prompt" in her menu: the whole prompt as text, so it can be pasted somewhere
+  ipcMain.handle('prompt:copy', (_e, text) => {
+    clipboard.writeText(String(text || ''));
+    return true;
+  });
   // her guide: where her tray icon is (it lives in the taskbar, off the overlay, hence overlay
   // coordinates past its edge), and the corner by the clock in case Windows hid it behind the ^
   ipcMain.handle('guide:tray', () => {
@@ -1041,7 +1074,8 @@ function main() {
   if (process.platform === 'win32') app.setAppUserModelId('capri.desktop');
 
   app.whenReady().then(() => {
-    if (!['codex', 'claude'].includes(config.load().assistant)) config.save({ assistant: activeAssistant().id });
+    restMode = config.load().rest;
+    if (!['codex', 'claude', 'agy', 'dsh'].includes(config.load().assistant)) config.save({ assistant: activeAssistant().id });
     serveProtocol();
     registerIpc();
     createOverlay();
@@ -1050,11 +1084,18 @@ function main() {
       overlay,
       onUpdate: (data) => {
         // a click on the taskbar brings it up over her: sitting on it, her legs would vanish behind it
-        if (data.taskbar && !lastWindows?.taskbar && config.load().rest === 'taskbar') raiseOverlay();
+        if (data.tray && restMode === 'taskbar') raiseOverlay();
         lastWindows = data;
         overlay?.webContents.send('windows:update', data);
       },
     });
+    // The watcher stays quiet while nothing changes, so a taskbar that stays up over her would stay
+    // up forever. Once a second, ask it what's there now; if it still covers her, put her back.
+    topWatch = setInterval(() => {
+      if (restMode !== 'taskbar' || !lastWindows?.tray) return;
+      raiseOverlay();
+      windowWatch?.probe();
+    }, 1000);
     createBridge({
       port: PORT,
       // her own Claude Code chat's hooks would cover its answer with theirs
@@ -1082,6 +1123,8 @@ function main() {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    clearInterval(topWatch);
+    topWatch = null;
     windowWatch?.stop();
   });
   app.on('window-all-closed', (e) => e.preventDefault());

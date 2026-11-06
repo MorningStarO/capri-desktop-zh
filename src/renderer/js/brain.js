@@ -6,6 +6,7 @@ import { pick, fmt, duration, basename, rand } from './util.js';
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const HACKING_TOOLS = new Set(['Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'Agent', 'Task']);
 const WORKING_EVERY = 20; // say something about progress every N tool calls
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const LONG_JOB_MS = 8 * 60 * 1000; // a job this long (or this busy) earns the whole satellite sequence
 const LONG_JOB_ACTIONS = 50;
 // mid-task with not a word from Claude: this long and the ticker starts counting (it's thinking),
@@ -76,11 +77,12 @@ export class Brain {
     }
     // the demo's second half (scripts/demo-sequence.js), not a Claude event
     if (evt.hook_event_name === 'CapriShowcase') return this.onShowcase?.();
-    // Codex's and Antigravity's hooks mark their sessions (codex:..., agy:...): only the one she watches
-    // counts. Another one at work is another AI in your life: she notices (bond.js).
-    const source = /^(codex|agy):/.exec(String(evt.session_id || ''))?.[1] || 'claude';
+    // Codex's, Antigravity's and DSH's hooks mark their sessions (codex:..., agy:..., dsh:...): only the
+    // one she watches counts. Another one at work is another AI in your life: she notices (bond.js).
+    const source = /^(codex|agy|dsh):/.exec(String(evt.session_id || ''))?.[1] || 'claude';
     if (!evt.demo && source !== this.assistant) {
-      this.onRival?.(source === 'agy' ? 'gemini' : source);
+      // by the model behind it, the way windows.ps1 keys them (Antigravity runs on Gemini, DSH on DeepSeek)
+      this.onRival?.(source === 'agy' ? 'gemini' : source === 'dsh' ? 'deepseek' : source);
       return undefined;
     }
     if (!this.watching && !evt.demo) return undefined; // not watching Claude Code: none of its business
@@ -97,11 +99,8 @@ export class Brain {
 
     // anything happening after a permission prompt means it was answered
     if (s.waiting && name !== 'Notification') {
-      s.waiting = false;
-      this.panel.clearKind('alert');
-      if (s.pointedAt) this.capri.stopPointing(); // she was showing you Claude's window
-      s.pointedAt = false;
-      if (this.capri.mode === 'alert') this.capri.setMode(s.working ? 'work' : 'idle');
+      this.panel.clearKind('alert'); // its onLeave does the rest (alertOver)
+      this.alertOver(s);             // no bubble on screen any more: still her up, still bring her back
     }
 
     switch (name) {
@@ -239,20 +238,25 @@ export class Brain {
   async onNotification(evt, s) {
     const type = evt.notification_type;
     if (type === 'permission_prompt' || type === 'elicitation_dialog' || type === 'agent_needs_input') {
+      // a green light to give, or a question to answer: she doesn't say the same thing for both
+      const lines = type === 'permission_prompt' ? this.t.permission : this.t.ask || this.t.permission;
+      const token = Symbol('alert'); // which alert this is, so an older one can't clear a newer one
       s.waiting = true;
+      s.waitToken = token;
       this.tally(evt)?.approval();
       this.capri.setMode('alert');
       this.voice.play('alert');
+      this.capri.rememberSpot(); // where she was before this called her over
       // you're on another window: she goes and points at Claude's, where the question is
       const win = this.away(s) && this.capri.windows.wins.find((w) => w.id === s.window);
       if (win && this.capri.canPoint(win)) {
         const quote = [this.t.guide.permissionThere, evt.message].filter(Boolean).join('\n');
-        this.say('alert', pick(this.t.permission), s, { quote, hold: null });
+        this.say('alert', pick(lines), s, { quote, hold: null, onLeave: () => this.alertOver(s, token) });
         s.pointedAt = await this.capri.pointAt(win, { label: this.t.guide.labels.claude });
-        if (!s.waiting && s.pointedAt) this.capri.stopPointing(); // answered while she was on her way
+        if (!s.waiting && s.pointedAt) this.alertOver(s); // answered while she was on her way
         return;
       }
-      this.say('alert', pick(this.t.permission), s, { quote: evt.message || '', hold: null });
+      this.say('alert', pick(lines), s, { quote: evt.message || '', hold: null, onLeave: () => this.alertOver(s, token) });
       // next to your pointer, even on another screen
       const near = await this.capri.toPointer(await this.host.cursor().catch(() => null));
       const toward = near?.inside ? Math.sign(near.x - this.capri.pos.x) || 1 : this.capri.towardCenter();
@@ -267,6 +271,27 @@ export class Brain {
     if (evt.message) this.say('info', evt.message, s, { hold: 5000 });
   }
 
+  // The alert is over, one way or another: you answered, or you closed the bubble. Free her up and
+  // put her back where she was before it called her over (her chat and guide panels stay pinned to
+  // her, so with one of those up she stays put).
+  alertOver(s, token) {
+    if (token && s.waitToken && s.waitToken !== token) return; // a newer alert replaced this one
+    s.waitToken = null;
+    const was = s.waiting || s.pointedAt;
+    s.waiting = false;
+    if (s.pointedAt) {
+      this.capri.stopPointing(); // she was showing you Claude's window
+      s.pointedAt = false;
+    }
+    if (!was) return;
+    if (this.capri.mode === 'alert') this.capri.setMode(s.working ? 'work' : 'idle');
+    setTimeout(() => {
+      const cur = this.panel.current;
+      if (this.panel.visible && (cur?.chat || cur?.guide)) return;
+      this.capri.backToSpot();
+    }, 0);
+  }
+
   async onStop(evt, s) {
     const wasWorking = s.working;
     s.working = false;
@@ -274,7 +299,7 @@ export class Brain {
     const summary = [
       s.count && plural(s.count, units.action, this.lang),
       s.files.size && plural(s.files.size, units.file, this.lang),
-      s.taskStart && duration(Date.now() - s.taskStart, this.lang),
+      s.taskStart && Date.now() - s.taskStart >= 1000 && duration(Date.now() - s.taskStart, this.lang),
     ].filter(Boolean).join(' · ');
     const quote = cleanMarkdown(evt.last_assistant_message || '');
     if (wasWorking || s.count) {
@@ -301,13 +326,21 @@ export class Brain {
     }
     // clear the stage: nothing should cover her victory pose
     this.panel.hide();
-    // quick back-and-forth answers don't deserve the whole show
-    const bigJob = s.count >= 3 || (s.taskStart && Date.now() - s.taskStart > 20000);
-    if (bigJob) await this.capri.teleport(this.capri.spot('stage'));
+    // a finished job always brings her out front (that's the whole point of the "done" bubble); if
+    // she's still on her way somewhere, let her land first or the move would only be queued
+    await this.idleish(2000);
+    await this.capri.teleport(this.capri.spot('stage'));
     // the panel comes in once she's back down from her victory pose
     this.capri.celebrate({ onSpeak: () => done({ summary, hold: 14000 }) });
     // a long one: she'll send the red light up to the satellite once it's all quiet
     if ((s.taskStart && Date.now() - s.taskStart >= LONG_JOB_MS) || s.count >= LONG_JOB_ACTIONS) this.capri.earnUplink();
+  }
+
+  // She's in the middle of a move: let her land (up to ms) so the next teleport isn't just queued
+  // behind it and played at whatever moment she happens to settle.
+  async idleish(ms) {
+    const until = Date.now() + ms;
+    while (this.capri.busy && Date.now() < until) await sleep(50);
   }
 
   // Is the window you typed your prompt in (Claude's) no longer the one in front?

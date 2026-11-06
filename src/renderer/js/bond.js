@@ -154,8 +154,8 @@ export const RIVALS = {
   chatgpt: 'ChatGPT', claude: 'Claude', codex: 'Codex', gemini: 'Gemini', copilot: 'Copilot', perplexity: 'Perplexity',
   deepseek: 'DeepSeek', grok: 'Grok', lechat: 'Le Chat', characterai: 'Character.AI', metaai: 'Meta AI',
 };
-// the one she watches is no rival of hers (Antigravity runs on Gemini)
-const OWN = { claude: ['claude'], codex: ['codex'], agy: ['gemini'] };
+// the one she watches is no rival of hers (Antigravity runs on Gemini, DSH on DeepSeek)
+const OWN = { claude: ['claude'], codex: ['codex'], agy: ['gemini'], dsh: ['deepseek'] };
 
 const NOTICE_AFTER = 4000;           // in front this long: she notices
 const ACT_AFTER = 45000;             // this long on it, lately: she does something about it

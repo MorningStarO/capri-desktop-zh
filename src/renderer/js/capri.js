@@ -74,6 +74,7 @@ export class Capri {
     this.possessWindows = true; // tray: "Possess my windows"
     this.restOn = 'corner'; // where she rests when nothing's going on: her corner, or 'taskbar' (her menu)
     this.nextHome = 0;
+    this.cameFrom = null; // where she was before an alert called her over (see rememberSpot)
     this.dragging = false;
     this.track = [];      // where the pointer was lately while it holds her: [{ x, y, t }]
     this.spin = 0;        // degrees she's turned while held, flying or knocked down
@@ -429,6 +430,43 @@ export class Capri {
     if (this.stance === 'sit' && this.perch?.id === 'taskbar') return Promise.resolve();
     // left of the clock and the tray icons, right of the middle (the app icons, on Windows 11)
     return this.sitOn({ win: this.ledge(), dx: clamp(this.view.w - 440, this.view.w * 0.6, post.x) });
+  }
+
+  // Where she was before an alert called her over to the pointer: so she can go back there after
+  // (a question to answer is no reason to stand in the middle of your screen for the rest of it).
+  rememberSpot() {
+    if (this.cameFrom || this.busy || this.dragging) return;
+    this.cameFrom = {
+      pos: { ...this.pos },
+      stance: this.stance,
+      perch: this.perch ? { ...this.perch } : null,
+      at: null, // where she was put, filled in by summon(): if she has wandered off since, leave her be
+    };
+  }
+
+  // Where to put her back, from a snapshot: her seat if it's still there, else where she stood.
+  spotBack(from) {
+    if (!from) return null;
+    const win = from.perch ? this.perchWin(from.perch.id) : null;
+    if (win) return { kind: 'sit', win, dx: from.perch.dx };
+    return { kind: 'stand', to: from.pos };
+  }
+
+  // Back to where she was. Not while you're holding her, or with her put away, or with a panel to
+  // read where she is (her chat is pinned to her): she stays put then.
+  async backToSpot() {
+    const from = this.cameFrom;
+    if (!from) return false;
+    this.cameFrom = null;
+    for (let i = 0; this.busy && i < 20; i++) await sleep(100); // let her finish whatever she's at
+    if (this.hidden || this.stowed || this.dormant || this.dragging || this.busy) return false;
+    if (Math.hypot(from.pos.x - this.pos.x, from.pos.y - this.pos.y) < 80) return false; // never left
+    if (from.at && Math.hypot(from.at.x - this.pos.x, from.at.y - this.pos.y) > 120) return false; // off she went
+    const back = this.spotBack(from);
+    if (!back) return false;
+    if (back.kind === 'sit') await this.sitOn({ win: back.win, dx: back.dx });
+    else await this.teleport(back.to);
+    return true;
   }
 
   pickSeat({ frontOnly = false, except = null } = {}) {
@@ -1338,6 +1376,7 @@ export class Capri {
   async stow() {
     if (this.stowed || this.stowing) return;
     this.stowing = true;
+    this.cameFrom = null; // put away in her biochip: nothing to come back to
     for (let i = 0; this.busy && i < 30; i++) await sleep(100); // let a move finish
     this.busy = true;
     this.endAct(false);
@@ -1820,7 +1859,9 @@ export class Capri {
       this.facing = cursor.x < this.pos.x ? 1 : -1;
       return;
     }
+    this.rememberSpot(); // so she can go back once the question is answered
     await this.teleport(to, { face: cursor.x < to.x ? 1 : -1 });
+    if (this.cameFrom) this.cameFrom.at = { ...this.pos }; // where she ended up: if she wanders off, she stays
   }
 
   // Next to the pointer wherever it is: on her screen, or on another one (she goes over to it
@@ -1925,6 +1966,7 @@ export class Capri {
     this.override = null;
     this.busy = false;
     this.dragging = true;
+    this.cameFrom = null; // you picked her up yourself: wherever she ends up is where she means to be
     if (this.upside) down.at = { x: SPRITE.head.x, y: SPRITE.head.y }; // hanging from the top: upright again, by the head
     this.endAct(false);
     const at = { x: clamp(down.at.x, 24, SPRITE.width - 24), y: clamp(down.at.y, 24, SPRITE.height - 24) };

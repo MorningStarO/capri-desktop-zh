@@ -77,10 +77,7 @@ export class Panel {
     });
     this.chatClose.addEventListener('click', () => this.hide());
 
-    this.el.addEventListener('click', () => {
-      if (this.current?.chat) this.chatInput.focus(); // a chat stays until you close it
-      else this.hide();
-    });
+    this.el.addEventListener('click', () => this.tap());
     this.portrait.addEventListener('animationend', (e) => {
       if (e.animationName === 'face-swap') this.portrait.classList.remove('is-swapping');
     });
@@ -88,6 +85,20 @@ export class Panel {
 
   get visible() {
     return !this.el.hidden && !this.suspended && !this.leaving;
+  }
+
+  // Your click on the panel itself: in a chat, the keypad goes to the line; on a message that asks
+  // for it (her look at your screen: talk to her about what she just saw), that; else it goes away.
+  tap() {
+    if (this.current?.chat) {
+      this.chatInput.focus(); // a chat stays until you close it
+      return;
+    }
+    if (this.current?.onTap) {
+      this.current.onTap();
+      return;
+    }
+    this.hide();
   }
 
   // Message: { kind, line, tag, quote, reply, summary, log: [{verb, target, error}], actions, guide,
@@ -103,6 +114,7 @@ export class Panel {
   // chat: a line to type to her, { placeholder, send, close, noteTag, note, secret }; onSend(text)
   //       gets what you typed (secret: hidden as you type, a key)
   // progress: a bar under the line, 0..1 (a download)
+  // onTap: () => void, when the bubble itself is clicked (else a click closes it)
   // onLeave: () => void, when this message goes (closed, timed out or replaced)
   say(msg) {
     const cur = this.current;
@@ -146,6 +158,9 @@ export class Panel {
     this.summary.hidden = !msg.summary;
     this.renderLog(msg.log || []);
 
+    // a ticker already queued must not pop up on top of the message
+    clearTimeout(this.tickerTimer);
+    this.tickerTimer = null;
     this.tickerEl.hidden = true;
     this.leaving = false;
     this.el.hidden = false;
@@ -515,27 +530,35 @@ export class Panel {
   setTicker(action) {
     this.tickerAction = action;
     clearTimeout(this.tickerTimer);
-    if (!action || this.visible) {
+    if (!action || this.visible || this.suspended) {
       this.tickerEl.hidden = true;
       return;
     }
     const wait = Math.max(0, 380 - (performance.now() - this.tickerShownAt));
-    this.tickerTimer = setTimeout(() => {
-      // Claude thinking: the seconds counting up don't flash each time, only the first one does
-      const counting = action.thinking && this.tickerEl.dataset.thinking === 'true' && !this.tickerEl.hidden;
-      this.tickerShownAt = performance.now();
-      this.tickerVerb.textContent = action.verb;
-      this.tickerTarget.textContent = action.target || '';
-      this.tickerEl.dataset.error = action.error ? 'true' : 'false';
-      this.tickerEl.dataset.thinking = action.thinking ? 'true' : 'false';
-      this.tickerEl.hidden = false;
-      if (!counting) {
-        this.tickerEl.classList.remove('is-flash');
-        void this.tickerEl.offsetWidth;
-        this.tickerEl.classList.add('is-flash');
-      }
-      this.place();
-    }, wait);
+    this.tickerTimer = setTimeout(() => this.showTicker(action), wait);
+  }
+
+  // The debounced half of setTicker: a message may have taken the stage by the time it fires,
+  // so look again before lighting the ticker up (it used to pop up on top of an alert).
+  showTicker(action) {
+    if (!action || this.visible || this.suspended) {
+      this.tickerEl.hidden = true;
+      return;
+    }
+    // Claude thinking: the seconds counting up don't flash each time, only the first one does
+    const counting = action.thinking && this.tickerEl.dataset.thinking === 'true' && !this.tickerEl.hidden;
+    this.tickerShownAt = performance.now();
+    this.tickerVerb.textContent = action.verb;
+    this.tickerTarget.textContent = action.target || '';
+    this.tickerEl.dataset.error = action.error ? 'true' : 'false';
+    this.tickerEl.dataset.thinking = action.thinking ? 'true' : 'false';
+    this.tickerEl.hidden = false;
+    if (!counting) {
+      this.tickerEl.classList.remove('is-flash');
+      void this.tickerEl.offsetWidth;
+      this.tickerEl.classList.add('is-flash');
+    }
+    this.place();
   }
 
   setAnchor(anchor, view) {

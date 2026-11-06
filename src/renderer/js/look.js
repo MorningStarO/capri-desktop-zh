@@ -9,9 +9,16 @@ import { fmt, rand } from './util.js';
 import { clean, mood } from './chat.js';
 
 const FIRST_AFTER = 2 * 60 * 1000; // turned on: her first look a couple of minutes later
-const EVERY = [8, 15];             // then every 8 to 15 minutes…
+// then every so often, as her menu has it: [min, max] between two looks on her own, and how long
+// the same window is left alone before she may speak of it again
+const EVERY = {
+  rare:     { every: [20 * 60e3, 40 * 60e3], same: 45 * 60e3 },
+  normal:   { every: [8 * 60e3, 15 * 60e3],  same: 25 * 60e3 },
+  often:    { every: [3 * 60e3, 6 * 60e3],   same: 12 * 60e3 },
+  lots:     { every: [1 * 60e3, 3 * 60e3],   same: 6 * 60e3 },
+  frequent: { every: [15e3, 45e3],           same: 3 * 60e3 },
+};
 const ACTIVE_MS = 90 * 1000;       // …if you're at your PC (the pointer moved lately)…
-const SAME_WINDOW_MS = 25 * 60 * 1000; // …and on another window than last time (or a good while later)
 // what her AI is asked about the picture
 const PROMPT = 'This is a picture of the user\'s screen right now. If you see a small figure with a big red mane, that\'s you: leave it out. Name one concrete thing you really see on it (the app or website, a title, a picture, a word), then react to it in character: curious, playful or teasing. One or two short sentences, talking to them.';
 
@@ -28,22 +35,38 @@ export class Look {
     this.active = active; // () => ms since the pointer last moved
     this.auto = false;    // her menu: Look at my screen now and then
     this.asked = false;   // you've been told what it means, and said yes
+    this.every = 'normal'; // her menu: how often, see EVERY
+    this.peek = false;    // her menu: look quietly, without the eyes and the scanline
     this.looking = false;
     this.nextAt = 0;
     this.lastFg = null;
     this.lastAt = 0;
-    setInterval(() => this.tick(), 30000);
+    setInterval(() => this.tick(), 5000); // fine enough for the 'frequent' tier to mean something
   }
 
   get t() {
     return this.brain.t.look;
   }
 
-  configure({ watchScreen, lookAsked }) {
+  range() {
+    return (EVERY[this.every] || EVERY.normal).every;
+  }
+
+  sameWindow() {
+    return (EVERY[this.every] || EVERY.normal).same;
+  }
+
+  configure({ watchScreen, lookAsked, lookEvery, lookPeek }) {
     const on = Boolean(watchScreen);
+    const every = EVERY[lookEvery] ? lookEvery : 'normal';
     if (on && !this.auto) this.nextAt = Date.now() + FIRST_AFTER;
+    // another tier: she waits again, as long as that tier says (and only then: any other setting
+    // changing must not push the next look back forever)
+    else if (on && this.auto && every !== this.every) this.nextAt = Date.now() + rand(...EVERY[every].every);
+    this.every = every;
     this.auto = on;
     this.asked = Boolean(lookAsked);
+    this.peek = Boolean(lookPeek);
   }
 
   // What looking means (where the picture goes), before the first time. True if you said yes.
@@ -91,8 +114,8 @@ export class Look {
     if (!this.auto || !this.asked || this.looking || Date.now() < this.nextAt) return;
     if (this.active() > ACTIVE_MS || !this.free()) return;
     const fg = this.capri.windows.fg;
-    if (fg === this.lastFg && Date.now() - this.lastAt < SAME_WINDOW_MS) return;
-    this.nextAt = Date.now() + rand(EVERY[0], EVERY[1]) * 60 * 1000;
+    if (fg === this.lastFg && Date.now() - this.lastAt < this.sameWindow()) return;
+    this.nextAt = Date.now() + rand(...this.range());
     this.now();
   }
 
@@ -135,7 +158,7 @@ export class Look {
       }
       this.lastFg = this.capri.windows.fg;
       this.lastAt = Date.now();
-      this.effect();
+      if (!this.peek) this.effect();
       const res = await this.host.lookSay({ id: snap.id, persona: this.chat.lookPersona(), prompt: `${PROMPT}\n${this.chat.languageNote()}` });
       if (!res.ok) {
         if (res.code === 'novision') {
@@ -150,10 +173,36 @@ export class Look {
       const text = clean(res.text).replace(/^["“«]\s*|\s*["”»]$/g, ''); // no quotes around what she says
       if (!text) return;
       this.chat.seen = { text, at: Date.now() };
-      this.panel.say({ kind: 'info', badge: 'SCAN', face: mood(text), line: text, hold: Math.min(13000, Math.max(5000, 2500 + text.length * 55)) });
+      this.say(text);
     } finally {
       this.looking = false;
     }
+  }
+
+  // What she saw, with a way into her chat: a button, or a tap on the bubble itself, opens it on the
+  // line she just said, so you can answer her. It keeps its place a little longer for that.
+  say(text) {
+    this.panel.say({
+      kind: 'info',
+      badge: 'SCAN',
+      face: mood(text),
+      line: text,
+      actions: [{ id: 'reply', label: this.brain.t.chat.talk, primary: true }],
+      onAction: (id) => {
+        if (id === 'reply') this.reply(text);
+      },
+      onTap: () => this.reply(text),
+      hold: Math.min(15000, Math.max(9000, 2500 + text.length * 55)),
+    });
+  }
+
+  // Into her chat, on what she just said (chat.js: her greeting, or the line she saw and said).
+  reply(text) {
+    if (this.chat.open) {
+      this.panel.chatInput?.focus();
+      return;
+    }
+    this.chat.start({ line: text, face: mood(text) });
   }
 }
 

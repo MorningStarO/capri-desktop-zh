@@ -1,9 +1,12 @@
 {
   "name": "capri-desktop",
-  "version": "0.5.1",
-  "description": "Capri, the Project Capricorn construct, living on your desktop and narrating what Claude Code is doing.",
+  "version": "0.5.1-zh.1",
+  "description": "Capri，摩羯座构造体，住在你的桌面上，给你讲述 Claude Code 正在做什么。",
   "author": "mochiiwuff",
-  "repository": "github:mochiiwuff/capri-desktop",
+  "contributors": [
+    "MorningStarO (https://github.com/MorningStarO)"
+  ],
+  "repository": "github:MorningStarO/capri-desktop-zh",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
@@ -18,6 +21,7 @@
     "hooks:agy:uninstall": "node scripts/install-hooks-agy.js --uninstall",
     "check:llm": "node scripts/check-llm.js",
     "test:hooks": "node --test tests/hooks.test.js",
+    "check:zh": "node scripts/check-zh.mjs",
     "dist": "electron-builder --win"
   },
   "keywords": [
@@ -64,6 +68,7 @@
       "runAfterFinish": true,
       "createDesktopShortcut": true,
       "shortcutName": "Capri",
+      "language": 2052,
       "artifactName": "Capri-Setup-${version}.${ext}"
     }
   }

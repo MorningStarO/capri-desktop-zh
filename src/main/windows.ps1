@@ -188,11 +188,43 @@ public static class CapriWindows {
     return "";
   }
 
+  // Set by a "snap" line: the next snapshot is written even if nothing looks changed.
+  public static volatile bool Force;
+
+  static bool Overlaps(RECT a, RECT b) {
+    return a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
+  }
+
+  // Is the taskbar over her right now? Asked of the z-order, not of who has focus: the taskbar comes
+  // up over her whenever it's clicked, and it stays there. Walking from the top down, a visible
+  // taskbar that overlaps her window, met before her window itself, is a taskbar covering her.
+  static bool TrayAbove(long self) {
+    RECT mine;
+    if (DwmGetWindowAttribute((IntPtr)self, DWMWA_EXTENDED_FRAME_BOUNDS, out mine, 16) != 0) return false;
+    bool above = false;
+    EnumWindows((h, l) => {
+      if (h.ToInt64() == self) return false; // reached her: everything after is below her
+      if (!IsWindowVisible(h)) return true;
+      var cls = new StringBuilder(64);
+      GetClassName(h, cls, 64);
+      string c = cls.ToString();
+      if (c != "Shell_TrayWnd" && c != "Shell_SecondaryTrayWnd") return true;
+      RECT r;
+      if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out r, 16) != 0) return true;
+      if (!Overlaps(r, mine)) return true; // the taskbar of another screen, or hidden off screen
+      above = true;
+      return false;
+    }, IntPtr.Zero);
+    return above;
+  }
+
   // What Capri asks, one line at a time on our input, each answered with a line of its own.
   public static void Listen() {
     var reader = new System.Threading.Thread(() => {
       string line;
       while ((line = Console.In.ReadLine()) != null) {
+        // "snap": say what we see now, even if it looks the same as last time
+        if (line.Trim() == "snap") { Force = true; continue; }
         var ask = line.Split(' ');
         if (ask.Length != 4 || ask[0] != "close") continue;
         string why;
@@ -279,6 +311,7 @@ public static class CapriWindows {
     // the taskbar clicked: it comes up over her (Windows has no levels among windows on top)
     bool taskbar = fgClass.ToString() == "Shell_TrayWnd" || fgClass.ToString() == "Shell_SecondaryTrayWnd";
     sb.Append("{\"fg\":").Append(fg.ToInt64()).Append(",\"taskbar\":").Append(taskbar ? "true" : "false")
+      .Append(",\"tray\":").Append(TrayAbove(self) ? "true" : "false")
       .Append(",\"ai\":").Append(Ai(fg))
       .Append(",\"game\":").Append(game == "" ? "null" : Json(game))
       .Append(",\"usb\":").Append(Usb());
@@ -319,10 +352,11 @@ $last = ''
 $tick = 0
 while ($true) {
   $snap = [CapriWindows]::Snapshot($Self)
-  if ($snap -ne $last) {
+  if ($snap -ne $last -or [CapriWindows]::Force) {
     [Console]::Out.WriteLine($snap)
     [Console]::Out.Flush()
     $last = $snap
+    [CapriWindows]::Force = $false
   }
   # stop with Capri, even if she crashed without telling us
   $tick++
