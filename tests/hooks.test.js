@@ -176,6 +176,177 @@ test('installer preserves other hooks, is idempotent, backs up, and uninstalls o
   }
 });
 
+test('DSH overlay: every style dsh-hooks and DSH write is replaced by item, never cut by line', () => {
+  const dsh = require('../scripts/install-hooks-dsh');
+  const script = 'C:/Users/x/AppData/Local/Programs/capri-desktop/resources/app.asar.unpacked/hooks/capri-dsh-hook.js';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-dsh-'));
+  const saved = { CAPRI_DSH_SCRIPT: process.env.CAPRI_DSH_SCRIPT, CAPRI_DSH_PATCH: process.env.CAPRI_DSH_PATCH, CAPRI_DSH_YAML: process.env.CAPRI_DSH_YAML };
+  process.env.CAPRI_DSH_SCRIPT = script;
+  process.env.CAPRI_DSH_PATCH = path.join(dir, 'cordis.patch.yml');
+  try {
+    process.env.CAPRI_DSH_YAML = require.resolve('js-yaml');
+  } catch {
+    delete process.env.CAPRI_DSH_YAML;
+  }
+  const entry = (hooks) => ['- id: dsh-hooks', '  name: dsh-hooks', '  config:', '    hooks:', hooks].join('\n') + '\n';
+  try {
+    // A fresh profile gets a compact item per event, and nothing else.
+    const fresh = dsh.installText('');
+    dsh.validateText(fresh);
+    for (const event of dsh.EVENTS) assert.ok(fresh.includes(`- {on: '${event}'`));
+    assert.equal(dsh.capriEvents(fresh).length, dsh.EVENTS.length);
+
+    // DSH's settings editor re-wraps a compact item over several lines, then the
+    // long path itself is folded onto its own line: this is the shape the old
+    // installer cut in half.
+    const wrapped = entry([
+      '      - {',
+      "          on: 'tool/call',",
+      "          run: 'node",
+      `            "${script}"',`,
+      '          input: stdin,',
+      '          timeoutMs: 3000',
+      '        }',
+      "      - {on: 'turn/end', run: 'node \"D:/other/hook.js\"', input: stdin, timeoutMs: 1000}",
+    ].join('\n'));
+    const afterWrapped = dsh.installText(wrapped);
+    dsh.validateText(afterWrapped);
+    assert.equal(dsh.capriEvents(afterWrapped).length, dsh.EVENTS.length);
+    assert.ok(afterWrapped.includes('D:/other/hook.js')); // not ours: kept
+    assert.equal(dsh.installText(afterWrapped), afterWrapped); // idempotent
+
+    // The exact damage: the line carrying the path is gone, leaving run: 'node.
+    const broken = wrapped.split('\n').filter((line) => !line.includes('capri-dsh-hook.js')).join('\n');
+    assert.throws(() => dsh.validateText(broken));
+    const repaired = dsh.installText(broken);
+    dsh.validateText(repaired);
+    assert.equal(dsh.capriEvents(repaired).length, dsh.EVENTS.length);
+
+    // A block sequence, as dsh-hooks' own settings page writes it.
+    const block = entry([
+      "      - on: 'user/message'",
+      `        run: 'node "${script}"'`,
+      '        input: stdin',
+      '        timeoutMs: 3000',
+      "      - on: 'turn/end'",
+      "        run: 'node \"D:/other/hook.js\"'",
+      '        input: stdin',
+      '        timeoutMs: 1000',
+    ].join('\n'));
+    const afterBlock = dsh.installText(block);
+    dsh.validateText(afterBlock);
+    assert.equal(dsh.capriEvents(afterBlock).length, dsh.EVENTS.length);
+    assert.ok(afterBlock.includes('D:/other/hook.js'));
+
+    // An inline flow sequence next to the key.
+    const inline = ['- id: dsh-hooks', '  name: dsh-hooks', '  config:',
+      `    hooks: [{on: 'turn/end', run: 'node "${script}"', input: stdin, timeoutMs: 3000}, {on: 'stop', run: 'echo hi'}]`,
+    ].join('\n') + '\n';
+    const afterInline = dsh.installText(inline);
+    dsh.validateText(afterInline);
+    assert.equal(dsh.capriEvents(afterInline).length, dsh.EVENTS.length);
+    assert.ok(afterInline.includes('echo hi'));
+
+    // Uninstall takes the block away again, unless the user put hooks in it.
+    assert.doesNotMatch(dsh.uninstallText(fresh), /dsh-hooks|capri-dsh-hook/);
+    assert.match(dsh.uninstallText(afterWrapped), /D:\/other\/hook\.js/);
+
+    // configure() writes, backs up, and never overwrites YAML DSH cannot parse.
+    const file = process.env.CAPRI_DSH_PATCH;
+    fs.writeFileSync(file, '- id: ui-chat\n  config:\n    transcriptView: standard\n');
+    const result = dsh.configure();
+    assert.ok(result.backup && fs.existsSync(result.backup));
+    assert.ok(fs.readFileSync(file, 'utf8').includes('- id: ui-chat'));
+    assert.equal(dsh.status().installed, true);
+    const before = fs.readFileSync(file, 'utf8');
+    dsh.configure();
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    assert.equal(fs.readdirSync(dir).length, 2); // the file plus one backup
+
+    fs.writeFileSync(file, '- id: [unclosed\n');
+    assert.throws(() => dsh.configure(), /未写入|无法解析/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '- id: [unclosed\n');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('DSH overlay: a round-trip wrapped by DSH itself, and the old line-cut, both heal back to eight hooks', () => {
+  const dsh = require('../scripts/install-hooks-dsh');
+  const script = 'C:/Users/x/AppData/Local/Programs/capri-desktop/resources/app.asar.unpacked/hooks/capri-dsh-hook.js';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-dsh-heal-'));
+  const saved = { CAPRI_DSH_SCRIPT: process.env.CAPRI_DSH_SCRIPT, CAPRI_DSH_PATCH: process.env.CAPRI_DSH_PATCH, CAPRI_DSH_YAML: process.env.CAPRI_DSH_YAML };
+  process.env.CAPRI_DSH_SCRIPT = script;
+  process.env.CAPRI_DSH_PATCH = path.join(dir, 'cordis.patch.yml');
+  process.env.CAPRI_DSH_YAML = require.resolve('js-yaml');
+  const file = process.env.CAPRI_DSH_PATCH;
+  const head = '- id: ui-chat\n  config:\n    transcriptView: standard\n';
+  const overlay = (hooks) => ['# === capri hooks BEGIN ===', head + '- id: dsh-hooks', '  name: dsh-hooks',
+    '  config:', '    hooks:', hooks, '# === capri hooks END ==='].join('\n') + '\n';
+  try {
+    // What DSH itself does on every settings change: parse the overlay into a
+    // document and write it back. That re-wraps our one-line items over several
+    // lines — still valid YAML, and still eight hooks. Skipped if this machine
+    // has no DSH profile to borrow `yaml` from.
+    let yaml = null;
+    try {
+      const root = path.join(os.homedir(), '.dsh', 'profiles');
+      for (const name of fs.readdirSync(root)) {
+        try { yaml = require(path.join(root, name, 'node_modules', 'yaml')); break; } catch { /* next profile */ }
+      }
+    } catch { /* no DSH here */ }
+    if (yaml) {
+      const compact = dsh.installText(head);
+      const wrapped = String(yaml.parseDocument(compact));
+      assert.notEqual(wrapped, compact);
+      dsh.validateText(wrapped);
+      assert.equal(dsh.capriEvents(wrapped).length, dsh.EVENTS.length);
+      const after = dsh.installText(wrapped);
+      dsh.validateText(after);
+      assert.equal(dsh.capriEvents(after).length, dsh.EVENTS.length);
+      assert.match(after, /- id: ui-chat/);
+    }
+
+    // The exact damage the old installer left: the line carrying the path is gone.
+    const wrapped = overlay([
+      '      - {',
+      "          on: 'tool/call',",
+      "          run: 'node",
+      `            "${script}"',`,
+      '          input: stdin,',
+      '          timeoutMs: 3000',
+      '        }',
+    ].join('\n'));
+    const broken = wrapped.split('\n').filter((line) => !line.includes('capri-dsh-hook.js')).join('\n');
+    assert.throws(() => dsh.validateText(broken));
+
+    // heal() repairs that file in place, keeps the rest of the file, and backs up.
+    fs.writeFileSync(file, broken);
+    const healed = dsh.heal();
+    assert.equal(healed.healed, true);
+    assert.ok(healed.backup && fs.existsSync(healed.backup));
+    const text = fs.readFileSync(file, 'utf8');
+    dsh.validateText(text);
+    assert.equal(dsh.capriEvents(text).length, dsh.EVENTS.length);
+    assert.match(text, /- id: ui-chat/);
+    assert.equal(dsh.heal().healed, false); // valid now: nothing to do
+
+    // Somebody else's file is never touched, broken or not.
+    const other = path.join(dir, 'other.yml');
+    fs.writeFileSync(other, '- id: [unclosed\n');
+    assert.equal(dsh.heal(other).healed, false);
+    assert.equal(fs.readFileSync(other, 'utf8'), '- id: [unclosed\n');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Antigravity: its events reach her as its own sessions, and its hook never decides for it', async (t) => {
   const events = [];
   const server = createBridge({ port: 0, onEvent(evt) { events.push(evt); } });

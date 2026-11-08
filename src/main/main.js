@@ -1074,6 +1074,12 @@ function main() {
   if (process.platform === 'win32') app.setAppUserModelId('capri.desktop');
 
   app.whenReady().then(() => {
+    // An older Capri could leave the dsh-hooks overlay unparseable, and DSH then
+    // refuses to start before any plugin loads. Heal it before anything else.
+    try {
+      const fixed = require('../../scripts/install-hooks-dsh').heal();
+      if (fixed.healed) console.log(`[capri] repaired DSH overlay: ${fixed.file}`);
+    } catch { /* no DSH profile on this machine: nothing to heal */ }
     restMode = config.load().rest;
     if (!['codex', 'claude', 'agy', 'dsh'].includes(config.load().assistant)) config.save({ assistant: activeAssistant().id });
     serveProtocol();
