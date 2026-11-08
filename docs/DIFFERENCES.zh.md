@@ -1,7 +1,7 @@
 # 与官方版 v0.5.1 的区别
 
 > 官方版：<https://github.com/mochiiwuff/capri-desktop> 的 `v0.5.1`（官方安装包 `Capri-Setup-0.5.1.exe`）。
-> 本版：在 `v0.5.1` 源码上做的简体中文改造 + 若干功能增补与修复，版本号 `0.5.1-zh.1`。
+> 本版：在 `v0.5.1` 源码上做的简体中文改造 + 若干功能增补与修复，版本号 `0.5.1-zh.2`。
 >
 > 一句话：官方版没有中文（只有 fr / en / es / pt / ru 五种）。本版新增第 6 种语言「简体中文」，把提示词
 > 拆出来并为中文写了一套语气规则，接入了 DeepSeek Harness，另外修了几个原版里会让人抓狂的小毛病
@@ -84,7 +84,7 @@
 
 ## 7. 安装与构建
 
-- 安装包名 `Capri-Setup-0.5.1-zh.1.exe`；`appId` / 产品名 / 安装流程与官方版一致（单用户、一键安装、装完自动启动）。
+- 安装包名 `Capri-Setup-0.5.1-zh.2.exe`；`appId` / 产品名 / 安装流程与官方版一致（单用户、一键安装、装完自动启动）。
 - 构建命令增加了两个参数（国内网络下可离线构建）：
   ```bash
   npx electron-builder --win -c.electronDist=node_modules/electron/dist \

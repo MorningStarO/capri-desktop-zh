@@ -78,15 +78,18 @@ Capri 是《赛博朋克：边缘行者》第二季里 *Project Capricorn* 的�
 - **提醒完回原位**：她跳出来叫你，你答完/关掉后回到刚才坐的位置，不挡在屏幕中间
 - **气泡不再被状态小条盖住**
 - **短任务也上台报喜**：原来要 3 个动作或 20 秒以上才跳上来，现在真干过活就上来
+- **开机首启 DSH 不再崩溃**（0.5.1-zh.2）：DSH 保存设置时会把钩子条目折成多行，旧安装器按「行」删除会切坏
+  YAML（报 `missed comma between flow collection entries`）。现在改为按「条目」编辑、写前用 YAML 校验、原子替换，
+  并在 Capri 启动时自愈（`--heal`），被折行过的旧文件也能修回来
 
 ![她的表情](docs/faces.png)
 
 ## 安装
 
-1. 到 [Releases](https://github.com/MorningStarO/capri-desktop-zh/releases) 下载 `Capri-Setup-0.5.1-zh.1.exe`
+1. 到 [Releases](https://github.com/MorningStarO/capri-desktop-zh/releases) 下载 `Capri-Setup-0.5.1-zh.2.exe`
 2. 校验一下再装（防止下载损坏或被替换）：
    ```powershell
-   Get-FileHash .\Capri-Setup-0.5.1-zh.1.exe -Algorithm SHA256
+   Get-FileHash .\Capri-Setup-0.5.1-zh.2.exe -Algorithm SHA256
    ```
    与 Release 里 `SHA256SUMS.txt` 的值对比，一致再双击。
 3. 安装是单用户、一键完成，装完自动启动（会弹 SmartScreen，因为安装包没有代码签名 —— 点「更多信息 → 仍要运行」）
